@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Market Trends (plain HTML/JS)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; padding: 20px; background: #f7f7f8; color: #111; }
+    .center { text-align: center; }
+    .card { background: white; padding: 18px; border-radius: 8px; box-shadow: 0 6px 18px rgba(16,24,40,0.06); max-width: 900px; margin: 20px auto; }
+    input[type="password"] { padding: 8px 10px; font-size: 16px; border-radius: 6px; border: 1px solid #d0d7de; }
+    button { padding: 8px 12px; font-size: 16px; border-radius: 6px; border: none; cursor: pointer; background:#2563eb; color:white; }
+    button:disabled { opacity: 0.6; cursor: default; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #e6e6e9; font-family: monospace; }
+    th { background: #fafafa; font-weight: 600; }
+    .muted { color: #666; font-size: 14px; }
+    .loading { display:inline-block; margin-left:8px; }
+  </style>
+  <!-- Axios CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <!-- CryptoJS CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/crypto-js@4.1.1/crypto-js.min.js"></script>
+</head>
+<body>
+  <div id="app" class="card">
+    <div id="loginView" class="center">
+      <h2>🔒 Enter Password</h2>
+      <div>
+        <input id="passwordInput" type="password" placeholder="Password" />
+        <button id="unlockBtn">Unlock</button>
+      </div>
+      <p id="loginMsg" class="muted">This page will fetch market data for a few symbols and compute SMAs.</p>
+    </div>
+
+    <div id="mainView" style="display:none;">
+      <h2>📊 Market Trends</h2>
+      <div id="controls" class="muted">
+        <span id="statusText">Idle</span>
+        <button id="refreshBtn" style="margin-left:12px;">Refresh</button>
+      </div>
+
+      <div id="tableContainer" style="margin-top:12px;">
+        <div id="loadingBlock" style="display:none;" class="muted">Loading data<span class="loading">⏳</span></div>
+        <table id="resultsTable" style="display:none;">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Trend</th>
+              <th>SMA50</th>
+              <th>SMA100</th>
+              <th>SMA200</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // --- config (same API key as your React version) ---
+  const API_KEY = "b03b52a7e2e348b994a45de0b3f6ae09";
+
+  // List of symbols
+  const symbols = ["XAU/USD", "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "USD/CAD", "EUR/AUD", "GBP/NZD"];
+
+  // If you want a pre-encrypted string, you could paste it here.
+  // The React code did: CryptoJS.AES.encrypt("9617", "secretKey").toString()
+  // We'll mirror that behavior (generate encrypted string at runtime) to keep things simple:
+  const encryptionKey = "secretKey";
+  const encryptedPassword = CryptoJS.AES.encrypt("9617", encryptionKey).toString();
+
+  // --- DOM ---
+  const loginView = document.getElementById('loginView');
+  const mainView = document.getElementById('mainView');
+  const passwordInput = document.getElementById('passwordInput');
+  const unlockBtn = document.getElementById('unlockBtn');
+  const loginMsg = document.getElementById('loginMsg');
+
+  const statusText = document.getElementById('statusText');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const loadingBlock = document.getElementById('loadingBlock');
+  const resultsTable = document.getElementById('resultsTable');
+  const resultsBody = document.getElementById('resultsBody');
+
+  let authorized = false;
+
+  // --- helpers ---
+  function calculateSMA(prices, period) {
+    const res = new Array(prices.length).fill(null);
+    for (let i = 0; i < prices.length; i++) {
+      if (i < period - 1) continue;
+      let sum = 0;
+      for (let j = i - period + 1; j <= i; j++) sum += prices[j];
+      res[i] = sum / period;
+    }
+    return res;
+  }
+
+  async function getTrend(symbol) {
+    try {
+      const url = "https://api.twelvedata.com/time_series";
+      const resp = await axios.get(url, {
+        params: {
+          symbol,
+          interval: "5min",
+          outputsize: 500,
+          apikey: API_KEY,
+        },
+      });
+
+      const data = resp.data;
+      if (!data.values) return { symbol, trend: "Error fetching data" };
+
+      // values come newest-first; convert and sort ascending by datetime
+      const values = data.values
+        .map(v => ({ datetime: new Date(v.datetime), close: parseFloat(v.close) }))
+        .sort((a, b) => a.datetime - b.datetime);
+
+      const closes = values.map(v => v.close);
+
+      const SMA50 = calculateSMA(closes, 50);
+      const SMA100 = calculateSMA(closes, 100);
+      const SMA200 = calculateSMA(closes, 200);
+
+      const lastClose = closes[closes.length - 1];
+      const lastSMA50 = SMA50[SMA50.length - 1];
+      const lastSMA100 = SMA100[SMA100.length - 1];
+      const lastSMA200 = SMA200[SMA200.length - 1];
+
+      let trend;
+      if (lastSMA50 != null && lastSMA100 != null && lastSMA200 != null) {
+        if (lastSMA50 > lastSMA100 && lastSMA100 > lastSMA200 && lastClose > lastSMA50) {
+          trend = `Uptrend 📈 (${lastClose.toFixed(2)})`;
+        } else if (lastSMA50 < lastSMA100 && lastSMA100 < lastSMA200 && lastClose < lastSMA50) {
+          trend = `Downtrend 📉 (${lastClose.toFixed(2)})`;
+        } else {
+          trend = `Sideways ➡️ (${lastClose.toFixed(2)})`;
+        }
+      } else {
+        trend = `Insufficient data (${lastClose ? lastClose.toFixed(2) : "-"})`;
+      }
+
+      return {
+        symbol,
+        trend,
+        lastClose,
+        SMA50: lastSMA50,
+        SMA100: lastSMA100,
+        SMA200: lastSMA200,
+      };
+    } catch (err) {
+      console.error("getTrend error for", symbol, err);
+      return { symbol, trend: "Error fetching data" };
+    }
+  }
+
+  async function fetchDataAndRender() {
+    try {
+      statusText.innerText = "Fetching...";
+      loadingBlock.style.display = '';
+      resultsTable.style.display = 'none';
+      resultsBody.innerHTML = '';
+
+      const promises = symbols.map(s => getTrend(s));
+      const rows = await Promise.all(promises);
+
+      // render
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+
+        const tdSymbol = document.createElement('td');
+        tdSymbol.textContent = r.symbol;
+        tr.appendChild(tdSymbol);
+
+        const tdTrend = document.createElement('td');
+        tdTrend.textContent = r.trend;
+        tr.appendChild(tdTrend);
+
+        const td50 = document.createElement('td');
+        td50.textContent = (r.SMA50 ? r.SMA50.toFixed(2) : "-");
+        tr.appendChild(td50);
+
+        const td100 = document.createElement('td');
+        td100.textContent = (r.SMA100 ? r.SMA100.toFixed(2) : "-");
+        tr.appendChild(td100);
+
+        const td200 = document.createElement('td');
+        td200.textContent = (r.SMA200 ? r.SMA200.toFixed(2) : "-");
+        tr.appendChild(td200);
+
+        resultsBody.appendChild(tr);
+      });
+
+      resultsTable.style.display = '';
+      statusText.innerText = "Updated: " + new Date().toLocaleString();
+    } catch (err) {
+      statusText.innerText = "Error";
+      console.error(err);
+      alert("Error fetching data. See console for details.");
+    } finally {
+      loadingBlock.style.display = 'none';
+    }
+  }
+
+  // --- login handling ---
+  unlockBtn.addEventListener('click', () => {
+    try {
+      const encrypted = encryptedPassword; // produced above
+      const decrypted = CryptoJS.AES.decrypt(encrypted, encryptionKey).toString(CryptoJS.enc.Utf8);
+
+      if (passwordInput.value === decrypted) {
+        authorized = true;
+        loginView.style.display = 'none';
+        mainView.style.display = '';
+        fetchDataAndRender();
+      } else {
+        alert("Wrong password!");
+      }
+    } catch (err) {
+      console.error("decrypt error", err);
+      alert("Decryption error");
+    }
+  });
+
+  // Enter key on password
+  passwordInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') unlockBtn.click();
+  });
+
+  // refresh button
+  refreshBtn.addEventListener('click', () => {
+    if (!authorized) return;
+    fetchDataAndRender();
+  });
+
+  // optional: auto-focus
+  passwordInput.focus();
+
+})();
+</script>
+</body>
+</html>
